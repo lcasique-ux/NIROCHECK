@@ -1,0 +1,5 @@
+{
+  "name": "NIROCHECK",
+  "description": "Aplicación para registrar y llevar inventario de asistencia en ruta.",
+  "requestFramePermissions": []
+}

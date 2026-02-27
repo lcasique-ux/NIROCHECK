@@ -25,4 +25,5 @@ export interface LogEntry {
   action: LogAction;
   timestamp: string; // Timestamp of the last update to this group
   quantity: number;
+  patente?: string;
 }

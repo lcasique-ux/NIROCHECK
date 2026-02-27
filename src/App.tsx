@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { USERS, INITIAL_INVENTORY } from './constants';
-import { Warehouse, Trash2 } from 'lucide-react';
+import { Warehouse } from 'lucide-react';
 import type { User, InventoryItem, LogEntry } from './types';
 import { LogAction } from './types';
 export default function App() {
@@ -54,28 +54,23 @@ export default function App() {
   const [isStockLoading, setIsStockLoading] = useState(true);
   const [stockError, setStockError] = useState<string | null>(null);
   const [isStockVisible, setIsStockVisible] = useState(false);
-  const [itemToDelete, setItemToDelete] = useState<InventoryItem | null>(null);
+  const [currentPatente, setCurrentPatente] = useState('');
+  const [patenteModalItem, setPatenteModalItem] = useState<InventoryItem | null>(null);
 
-  const handleInitiateDelete = (item: InventoryItem) => {
-    setItemToDelete(item);
-  };
-
-  const executeDeleteItem = () => {
-    if (!itemToDelete) return;
-    setInventory(prevInventory => prevInventory.filter(item => item.id !== itemToDelete.id));
-    setItemToDelete(null);
-  };
-
-  const cancelDelete = () => {
-    setItemToDelete(null);
-  };
-
-  const handleAction = (item: InventoryItem, action: LogAction) => {
+  const handleAction = (item: InventoryItem, action: LogAction, patenteOverride?: string) => {
     if (!currentUser) {
       alert('Por favor, seleccione un usuario.');
       return;
     }
 
+    // If it's a SALIDA and no patente is provided yet, open the modal
+    if (action === LogAction.OUT && !patenteOverride) {
+      setPatenteModalItem(item);
+      setCurrentPatente('');
+      return;
+    }
+
+    const patenteToUse = patenteOverride || '';
     const newInventoryQuantity = action === LogAction.IN ? item.quantity + 1 : item.quantity - 1;
 
     // Update inventory state first
@@ -86,7 +81,10 @@ export default function App() {
     );
 
     // Now, handle the logging with quantity grouping
-    const logId = `log-${item.id}-${currentUser.id}-${action}`;
+    const logId = action === LogAction.OUT && patenteToUse 
+      ? `log-${item.id}-${currentUser.id}-${action}-${patenteToUse}`
+      : `log-${item.id}-${currentUser.id}-${action}`;
+      
     const existingLogIndex = logs.findIndex(log => log.id === logId);
 
     if (existingLogIndex > -1) {
@@ -108,9 +106,14 @@ export default function App() {
         action: action,
         timestamp: new Date().toISOString(),
         quantity: 1,
+        patente: action === LogAction.OUT ? patenteToUse : undefined,
       };
       setLogs(prevLogs => [newLog, ...prevLogs]);
     }
+    
+    // Close modal if it was open
+    setPatenteModalItem(null);
+    setCurrentPatente('');
   };
 
   const handleInitiateSave = () => {
@@ -129,16 +132,19 @@ export default function App() {
     setShowConfirmation(false);
 
     try {
-      const webAppUrl = import.meta.env.VITE_APPS_SCRIPT_WEB_APP_URL;
+      const rawUrl = import.meta.env.VITE_APPS_SCRIPT_WEB_APP_URL;
+      const webAppUrl = rawUrl ? rawUrl.trim() : null;
+      
       if (!webAppUrl) {
-        throw new Error('La URL de Apps Script no está configurada.');
+        throw new Error('La URL de Apps Script no está configurada en las variables de entorno.');
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // Aumentado a 60 segundos
 
       const response = await fetch(webAppUrl, {
         method: 'POST',
+        mode: 'cors', // Asegurar modo CORS
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ logs: logsToConfirm }),
         signal: controller.signal,
@@ -196,14 +202,19 @@ export default function App() {
     setIsStockLoading(true);
     setStockError(null);
     try {
-      const webAppUrl = import.meta.env.VITE_APPS_SCRIPT_WEB_APP_URL;
+      const rawUrl = import.meta.env.VITE_APPS_SCRIPT_WEB_APP_URL;
+      const webAppUrl = rawUrl ? rawUrl.trim() : null;
+      
       if (!webAppUrl) {
         throw new Error('La URL de Apps Script no está configurada.');
       }
       // Append a parameter to signal a GET request for inventory
-      const getUrl = `${webAppUrl.trim()}?action=getInventory`;
+      const getUrl = `${webAppUrl}${webAppUrl.includes('?') ? '&' : '?'}action=getInventory`;
       
-      const response = await fetch(getUrl, { method: 'GET' });
+      const response = await fetch(getUrl, { 
+        method: 'GET',
+        mode: 'cors'
+      });
 
       if (!response.ok) {
         throw new Error(`Error de red: ${response.status} - ${response.statusText}`);
@@ -310,12 +321,19 @@ export default function App() {
               {inventory.map(item => (
                 <div key={item.id} className="bg-blue-50/50 p-3 rounded-lg flex flex-col sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex-grow mb-3 sm:mb-0">
-                    <span className="font-medium text-blue-900">{item.name}</span>
+                    <div className="flex items-center space-x-2 mb-1">
+                      <span className="font-medium text-blue-900">{item.name}</span>
+                      {realTimeStock.find(rs => rs.code === item.code) && (
+                        <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold uppercase">
+                          Stock Bodega: {realTimeStock.find(rs => rs.code === item.code)?.quantity}
+                        </span>
+                      )}
+                    </div>
                     <div className="flex items-center space-x-2">
                       <span className={`text-xl font-bold ${item.quantity > 0 ? 'text-blue-600' : 'text-red-500'}`}>
                         {item.quantity}
                       </span>
-                      <span className="text-sm text-slate-500">unidades</span>
+                      <span className="text-sm text-slate-500">unidades locales</span>
                     </div>
                   </div>
                   <div className="flex items-center space-x-2 flex-shrink-0">
@@ -323,13 +341,6 @@ export default function App() {
                       <button onClick={() => handleAction(item, LogAction.IN)} className="bg-blue-500 text-white px-5 py-2 rounded-lg hover:bg-blue-600 transition-colors font-semibold text-sm">INGRESO</button>
                       <button onClick={() => handleAction(item, LogAction.OUT)} className="bg-slate-200 text-slate-700 px-5 py-2 rounded-lg hover:bg-slate-300 transition-colors font-semibold text-sm">SALIDA</button>
                     </div>
-                    <button 
-                      onClick={() => handleInitiateDelete(item)} 
-                      className="text-slate-400 hover:text-red-500 p-2 rounded-full hover:bg-red-100 transition-colors"
-                      title="Eliminar producto"
-                    >
-                      <Trash2 size={16} />
-                    </button>
                   </div>
                 </div>
               ))}
@@ -364,7 +375,9 @@ export default function App() {
                     <span className="font-semibold text-slate-700">{log.itemName}</span>
                     <span className="font-bold text-slate-600">x{log.quantity}</span>
                   </div>
-                  <p className={`font-bold ${log.action === LogAction.IN ? 'text-blue-600' : 'text-red-600'}`}>{log.action}</p>
+                  <p className={`font-bold ${log.action === LogAction.IN ? 'text-blue-600' : 'text-red-600'}`}>
+                    {log.action} {log.patente ? ` - Patente: ${log.patente}` : ''}
+                  </p>
                   <p className="text-slate-500 text-xs">{log.userName} - {new Date(log.timestamp).toLocaleString('es-CL')}</p>
                 </div>
               ))}
@@ -388,7 +401,9 @@ export default function App() {
                     <div>
                       <span className={`font-semibold ${log.action === LogAction.IN ? 'text-blue-600' : 'text-red-600'}`}>{log.action}: </span>
                       <span className="text-slate-700">{log.itemName}</span>
-                      <span className="text-slate-500 text-xs block">({log.userName})</span>
+                      <span className="text-slate-500 text-xs block">
+                        ({log.userName}){log.patente ? ` - Patente: ${log.patente}` : ''}
+                      </span>
                     </div>
                     <span className="font-bold text-slate-600">x{log.quantity}</span>
                   </div>
@@ -434,26 +449,45 @@ export default function App() {
             </div>
           </div>
         )}
-
-        {itemToDelete && (
+        {patenteModalItem && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md">
-              <h2 className="text-xl font-bold text-red-800 mb-4">Confirmar Eliminación</h2>
-              <p className="text-slate-600 mb-6">
-                ¿Estás seguro de que quieres eliminar el producto <strong>{itemToDelete.name}</strong>? Esta acción no se puede deshacer.
+              <h2 className="text-xl font-bold text-blue-900 mb-2">Registrar Salida</h2>
+              <p className="text-slate-600 mb-4 text-sm">
+                Ingresa la patente del vehículo para: <br/>
+                <strong className="text-blue-800">{patenteModalItem.name}</strong>
               </p>
+              
+              <div className="mb-6">
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Patente del Vehículo</label>
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="Ej: ABCD-12"
+                  value={currentPatente}
+                  onChange={(e) => setCurrentPatente(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && currentPatente.trim()) {
+                      handleAction(patenteModalItem, LogAction.OUT, currentPatente);
+                    }
+                  }}
+                  className="w-full p-3 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 uppercase text-lg font-mono tracking-wider"
+                />
+              </div>
+
               <div className="flex justify-end space-x-3">
-                <button
-                  onClick={cancelDelete}
+                <button 
+                  onClick={() => setPatenteModalItem(null)} 
                   className="bg-slate-200 text-slate-700 px-5 py-2 rounded-lg hover:bg-slate-300 transition-colors font-semibold"
                 >
                   Cancelar
                 </button>
-                <button
-                  onClick={executeDeleteItem}
-                  className="bg-red-600 text-white px-5 py-2 rounded-lg hover:bg-red-700 transition-colors font-semibold"
+                <button 
+                  onClick={() => handleAction(patenteModalItem, LogAction.OUT, currentPatente)}
+                  disabled={!currentPatente.trim()}
+                  className="bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 transition-colors font-semibold disabled:bg-slate-300"
                 >
-                  Sí, Eliminar
+                  Confirmar Salida
                 </button>
               </div>
             </div>
